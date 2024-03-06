@@ -190,9 +190,7 @@ def preprocessing_data(df, site_id, frequency_list, frequency):
 
         print("Before Amputation:")
         df.info()
-        for freq in frequency_list:
-            if frequency in freq:
-                data = data_amputation(df, freq)
+        data = data_amputation(df, frequency)
 
         print("After Amputation:")
         data['site_id'] = df['site_id'].iloc[0]

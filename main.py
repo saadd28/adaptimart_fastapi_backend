@@ -3,6 +3,7 @@ import pandas as pd
 import logging
 import utils
 from configparser import ConfigParser
+import ast
 
 
 def run_main():
@@ -25,20 +26,21 @@ if __name__ == "__main__":
     port = int(parser.get('mongodb', 'port'))
     database = parser.get('mongodb', 'database')
     frequency_list = parser.get('mongodb', 'frequency_list')
-    frequency = parser.get('mongodb', 'frequency')
+    frequency_list = ast.literal_eval(frequency_list)
     dynamic_pricing_data_collection_name = parser.get(
         'mongodb', 'dynamic_pricing_data_collection_name')
     feature_engineered_collection_name = parser.get(
         'mongodb', 'feature_engineered_collection_name')
     config_collection = parser.get('mongodb', 'config_collection')
     tenants_collection_name = parser.get('mongodb', 'tenants_collection_name')
-
+    feature_engineered_collection_name_two = parser.get(
+        'mongodb', 'feature_engineered_collection_name_two')
     default_configurations = {
         "site_id": "8d3ea3bc-f65b-4227-9fa6-6fae40e4575a",
         "threshold_base_price_change": 10,
         "threshold_minimum_sales": 480,
         "threshold_recent_months": 20,
-        "frequency": 7
+        "frequency": 3
     }
     # site_id, end date is current date
     # interval days in ini and then start date calculate at run time
@@ -70,26 +72,39 @@ if __name__ == "__main__":
 
         utils.feature_engineering_collection_management(
             feature_engineered_collection_name, db)
+
+        utils.feature_engineering_collection_management(
+            feature_engineered_collection_name_two, db)
+
         for site_id in tenants_list:
-            logging.info("Fetching Data from MongoDB...")
-            dynamic_pricing_data = utils.fetch_data(
-                dynamic_pricing_data_collection_name, db)
+            for index, frequency in enumerate(frequency_list):
 
-            logging.info("Starting Preprocessing of data...")
-            dynamic_pricing_data = utils.preprocessing_data(
-                dynamic_pricing_data, site_id, frequency_list, frequency)
+                logging.info("Fetching Data from MongoDB...")
+                dynamic_pricing_data = utils.fetch_data(
+                    dynamic_pricing_data_collection_name, db)
 
-            logging.info("Applying Threshold Filtering...")
-            dynamic_pricing_data = utils.threshold_filtering_price_optimization(
-                dynamic_pricing_data, configurations["threshold_base_price_change"], configurations["threshold_minimum_sales"], configurations["threshold_recent_months"])
+                logging.info("Starting Preprocessing of data...")
+                dynamic_pricing_data = utils.preprocessing_data(
+                    dynamic_pricing_data, site_id, frequency_list, frequency)
 
-            logging.info("Doing Feature Engineering...")
-            dynamic_pricing_data = utils.feature_engineering(
-                dynamic_pricing_data)
+                logging.info("Applying Threshold Filtering...")
+                dynamic_pricing_data = utils.threshold_filtering_price_optimization(
+                    dynamic_pricing_data, configurations["threshold_base_price_change"], configurations["threshold_minimum_sales"], configurations["threshold_recent_months"])
 
-            logging.info("Storing Feature Engineered Data in MongoDB...")
-            utils.store_dataframe_in_mongodb(
-                dynamic_pricing_data, feature_engineered_collection_name, db)
+                logging.info("Doing Feature Engineering...")
+                dynamic_pricing_data = utils.feature_engineering(
+                    dynamic_pricing_data)
+
+                if (index == 0):
+                    logging.info(
+                        "Storing Feature Engineered Data in MongoDB...")
+                    utils.store_dataframe_in_mongodb(
+                        dynamic_pricing_data, feature_engineered_collection_name, db)
+                elif (index == 1):
+                    logging.info(
+                        "Storing Second Feature Engineered Data in MongoDB...")
+                    utils.store_dataframe_in_mongodb(
+                        dynamic_pricing_data, feature_engineered_collection_name_two, db)
 
     else:
         logging.error("Failed to connect to MongoDB database.")
