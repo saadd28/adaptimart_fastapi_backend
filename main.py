@@ -56,7 +56,7 @@ if __name__ == "__main__":
         logging.info("Fetching Tenants List from MongoDB")
         tenants_list = utils.fetch_tenants_list(tenants_collection_name, db)
         tenants_list = utils.extract_site_ids(tenants_list)
-        
+
         if tenants_list is not None:
             logging.info("Tenants List: ", tenants_list)
 
@@ -68,6 +68,8 @@ if __name__ == "__main__":
             raise ValueError(
                 f"Collection '{configurations['collection_name']}' does not exist in the database.")
 
+        utils.feature_engineering_collection_management(
+            feature_engineered_collection_name, db)
         for site_id in tenants_list:
             logging.info("Fetching Data from MongoDB...")
             dynamic_pricing_data = utils.fetch_data(
@@ -82,7 +84,8 @@ if __name__ == "__main__":
                 dynamic_pricing_data, configurations["threshold_base_price_change"], configurations["threshold_minimum_sales"], configurations["threshold_recent_months"])
 
             logging.info("Doing Feature Engineering...")
-            dynamic_pricing_data = utils.feature_engineering(dynamic_pricing_data)
+            dynamic_pricing_data = utils.feature_engineering(
+                dynamic_pricing_data)
 
             logging.info("Storing Feature Engineered Data in MongoDB...")
             utils.store_dataframe_in_mongodb(

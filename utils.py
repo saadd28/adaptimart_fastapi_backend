@@ -53,11 +53,11 @@ def fetch_configurations(collection_name, db, default_configurations):
             logging.info("Creating Config Vars Collection in MongoDB")
             db.create_collection(collection_name)
             default_configurations = {
-                "site_id": "8d3ea3bc-f65b-4227-9fa6-6fae40e4575a",
-                "threshold_base_price_change": 3,
-                "threshold_minimum_sales": 100,
+                "site_id": "201cb789-4198-488b-a5eb-4e7df0fb4bee",
+                "threshold_base_price_change": 5,
+                "threshold_minimum_sales": 200,
                 "threshold_recent_months": 20,
-                "frequency": 7
+                "frequency": 1
             }
             db[collection_name].insert_one(default_configurations)
             return default_configurations
@@ -121,8 +121,6 @@ def data_amputation(df, frequency):
             frequency).sum().groupby('product_item_sku_id').fillna(0).reset_index()
         feature_frequency_carts_df = df.groupby('product_item_sku_id')['cart_quantity'].resample(
             frequency).sum().groupby('product_item_sku_id').fillna(0).reset_index()
-        # feature_frequency_site_id_df = df.groupby('product_item_sku_id')['site_id'].resample(
-        #     frequency).groupby('product_item_sku_id').ffill().reset_index()
 
         # Compiling Resampled Data
         data = pd.DataFrame(
@@ -196,14 +194,12 @@ def preprocessing_data(df, site_id, frequency_list, frequency):
             if frequency in freq:
                 data = data_amputation(df, freq)
 
-        data.reset_index(inplace=True)
-
-        merged_data = pd.merge(
-            data, df[['site_id', 'product_item_sku_id']], on='product_item_sku_id', how='left')
-        # data.to_csv('data.csv', index=False, mode='w')
         print("After Amputation:")
-        merged_data.info()
-        return merged_data
+        data['site_id'] = df['site_id'].iloc[0]
+        # data.to_csv('data.csv', index=False, mode='w')
+
+        data.info()
+        return data
     except Exception as e:
         logging.error(f"Error in preprocessing data: {e}")
         return None
@@ -308,22 +304,14 @@ def threshold_filtering_price_optimization(df, threshold_base_price_change, thre
         filtered_df_months['product_item_sku_id_encoded'] = label_encoder.fit_transform(
             filtered_df_months['product_item_sku_id'])
 
+        cutoff_date = '2021-04-01'  # Replace with your desired date
+        filtered_df_months = filtered_df_months[filtered_df_months['creation_date'] >= cutoff_date]
         # filtered_df_months.to_csv('thresholding_final.csv', index=False, mode='w')
 
         return filtered_df_months
     except Exception as e:
         logging.error(f"Error in Threshold Filtering: {e}")
         return None
-
-
-def days_till_event(event_date, creation_date):
-    event_month_day = event_date[1:]
-    event_date = pd.to_datetime(
-        f"{creation_date.year}-{event_month_day}")
-    if creation_date > event_date:
-        event_date = pd.to_datetime(
-            f"{creation_date.year + 1}-{event_month_day}")
-    return (event_date - creation_date).days
 
 
 def feature_engineering(df):
@@ -343,6 +331,15 @@ def feature_engineering(df):
             lambda x: (x.day-1)//7 + 1)
         df['month_of_year'] = df['creation_date'].dt.month
         # Add days till specific events
+
+        def days_till_event(event_date, creation_date):
+            event_month_day = event_date[1:]
+            event_date = pd.to_datetime(
+                f"{creation_date.year}-{event_month_day}")
+            if creation_date > event_date:
+                event_date = pd.to_datetime(
+                    f"{creation_date.year + 1}-{event_month_day}")
+            return (event_date - creation_date).days
 
         # add days till labor day, 4th of july, thanksgiving, newyears
         df['days_till_black_friday'] = df['creation_date'].apply(
@@ -397,11 +394,26 @@ def store_dataframe_in_mongodb(df, collection_name, db):
         # Specify the collection
         collection = db[collection_name]
 
-        # Delete all documents from the collection
-        collection.delete_many({})
-
         # Insert documents into the collection
         collection.insert_many(data)
 
     except Exception as e:
         logging.error(f"An error storing feature engineered data: {e}")
+
+
+def feature_engineering_collection_management(collection_name, db):
+    try:
+        # Specify the collection
+        collection = db[collection_name]
+
+        # Check if the collection exists
+        if collection.count_documents({}) > 0:
+            # Delete all documents from the collection
+            collection.delete_many({})
+        else:
+            # If the collection doesn't exist, create one
+            db.create_collection(collection_name)
+
+    except Exception as e:
+        logging.error(
+            f"An error occurred while storing feature engineered data: {e}")
