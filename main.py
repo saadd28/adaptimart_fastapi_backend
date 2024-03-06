@@ -1,95 +1,92 @@
-from fastapi import FastAPI
+# mongodb://localhost:27017
 import pandas as pd
-from darts import TimeSeries
-import pickle
-from pydantic import BaseModel
-from typing import Dict, Union, List
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI()
+import logging
+import utils
+from configparser import ConfigParser
 
 
-class PredictionRequest(BaseModel):
-    sku_id_str: str
-    prediction_frequency: str
-    # chunk: int
+def run_main():
+    pass
 
 
-class PredictionResponse(BaseModel):
-    data: List[Dict[str, Union[str, float]]]
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+    config_file = "config.ini"
+    # collection_name = 'dynamic_pricing_data'
+    # config_collection = 'config_vars'
+    # feature_engineered_collection = 'feature_engineered_data'
+    # Create a parser
+    parser = ConfigParser()
+    parser.read(config_file)
 
+    # Read MongoDB connection parameters
+    host = parser.get('mongodb', 'host')
+    port = int(parser.get('mongodb', 'port'))
+    database = parser.get('mongodb', 'database')
+    frequency_list = parser.get('mongodb', 'frequency_list')
+    frequency = parser.get('mongodb', 'frequency')
+    dynamic_pricing_data_collection_name = parser.get(
+        'mongodb', 'dynamic_pricing_data_collection_name')
+    feature_engineered_collection_name = parser.get(
+        'mongodb', 'feature_engineered_collection_name')
+    config_collection = parser.get('mongodb', 'config_collection')
+    tenants_collection_name = parser.get('mongodb', 'tenants_collection_name')
 
-# Add CORS middleware to allow requests from all origins
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Update this with the list of allowed origins
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
-
-
-@app.post("/predict/")
-async def predict_sales(request: PredictionRequest):
-
-    sku_id_str = request.sku_id_str
-    fr = request.prediction_frequency
-    # chunk = request.chunk
-    sku_mapping = {
-        'FO-DMUN2Q': 0,
-        'MA-DMDCNPLQ': 1,
-        'MA-DMSUFQ': 2,
-        'MA-DMSUFT': 3,
-        'PI-DMDCFMJ': 4,
-        'PI-DMDCFMK': 5,
-        'PI-DMDCMEJ': 6,
-        'PI-DMDCMEK': 7,
-        'PI-DMDCSOJ': 8,
-        'PI-DMDCSOK': 9
+    default_configurations = {
+        "site_id": "8d3ea3bc-f65b-4227-9fa6-6fae40e4575a",
+        "threshold_base_price_change": 10,
+        "threshold_minimum_sales": 480,
+        "threshold_recent_months": 20,
+        "frequency": 7
     }
-    sku_id = sku_mapping.get(sku_id_str)
+    # site_id, end date is current date
+    # interval days in ini and then start date calculate at run time
+    # main in functions
+    # tenant, site_id, product_id, sku_id
 
-    # Load the model
-    if fr == 'D':
-        model_filename = "xgb_dynamic_pricing_model.pkl"
-        with open(model_filename, 'rb') as file:
-            loaded_model = pickle.load(file)
-        dataframe = pd.read_csv('dataset.csv')
-        train = pd.read_csv('train.csv')
-        pred_chunk = 30
+    db = utils.get_mongodb_connection(host, port, database)
 
-    elif fr == 'W':
-        model_filename = "catboost_dynamic_pricing_model.pkl"
-        with open(model_filename, 'rb') as file:
-            loaded_model = pickle.load(file)
-        dataframe = pd.read_csv('dataset_weekly.csv')
-        train = pd.read_csv('train_weekly.csv')
-        pred_chunk = 7
+    dynamic_pricing_data = None
+    configurations = None
 
-    future_features = ['base_price', 'is_holiday', 'day_of_week', 'week_of_month', 'month_of_year', 'days_till_black_friday', 'days_till_christmas', 'days_till_summer',
-                       'days_till_winter', 'is_promotion', 'days_till_thanksgiving', 'days_till_independence_day', 'base_price_rolling_3', 'base_price_rolling_7', 'base_price_rolling_30']
-    past_features = ['base_price', 'is_holiday', 'day_of_week', 'week_of_month', 'month_of_year', 'days_till_black_friday', 'days_till_christmas', 'days_till_summer',
-                     'days_till_winter', 'is_promotion', 'days_till_thanksgiving', 'days_till_independence_day', 'base_price_rolling_3', 'base_price_rolling_7', 'base_price_rolling_30']
+    if db is not None:
+        logging.info("MongoDB database connected successfully!")
 
-    train_time_series = TimeSeries.from_group_dataframe(
-        train, group_cols="product_item_sku_id_encoded", time_col='creation_date', fill_missing_dates=False, freq=fr, value_cols=['sales'])
-    future_covariates_series2 = TimeSeries.from_group_dataframe(
-        dataframe, group_cols="product_item_sku_id_encoded", time_col='creation_date', fill_missing_dates=False, freq=fr, value_cols=future_features)
-    past_covariates_series2 = TimeSeries.from_group_dataframe(
-        dataframe, group_cols="product_item_sku_id_encoded", time_col='creation_date', fill_missing_dates=False, freq=fr, value_cols=past_features)
+        logging.info("Fetching Tenants List from MongoDB")
+        tenants_list = utils.fetch_tenants_list(tenants_collection_name, db)
+        tenants_list = utils.extract_site_ids(tenants_list)
+        
+        if tenants_list is not None:
+            logging.info("Tenants List: ", tenants_list)
 
-    pred = loaded_model.predict(pred_chunk, series=train_time_series[sku_id], future_covariates=future_covariates_series2[sku_id],
-                                past_covariates=past_covariates_series2[sku_id])
-    
-    df1 = pred.pd_dataframe()
-    df1['sales'] = df1['sales'].apply(
-        lambda x: max(0, round(x))).astype(int).tolist()
+        logging.info("Fetching Configurations from MongoDB!")
+        configurations = utils.fetch_configurations(
+            config_collection, db, default_configurations)
+        # Check if the collection exists
+        if dynamic_pricing_data_collection_name not in db.list_collection_names():
+            raise ValueError(
+                f"Collection '{configurations['collection_name']}' does not exist in the database.")
 
-    df1['flag'] = 0
-    df2 = train_time_series[sku_id].pd_dataframe().tail(30)
-    df2['flag'] = 1
-    result_df = pd.concat([df2, df1])
-    data = [{'date': date.strftime('%Y-%m-%d'), 'sales': sales, 'flag': flag}
-            for date, sales, flag in zip(result_df.index, result_df['sales'], result_df['flag'])]
+        for site_id in tenants_list:
+            logging.info("Fetching Data from MongoDB...")
+            dynamic_pricing_data = utils.fetch_data(
+                dynamic_pricing_data_collection_name, db)
 
-    return PredictionResponse(data=data)
+            logging.info("Starting Preprocessing of data...")
+            dynamic_pricing_data = utils.preprocessing_data(
+                dynamic_pricing_data, site_id, frequency_list, frequency)
+
+            logging.info("Applying Threshold Filtering...")
+            dynamic_pricing_data = utils.threshold_filtering_price_optimization(
+                dynamic_pricing_data, configurations["threshold_base_price_change"], configurations["threshold_minimum_sales"], configurations["threshold_recent_months"])
+
+            logging.info("Doing Feature Engineering...")
+            dynamic_pricing_data = utils.feature_engineering(dynamic_pricing_data)
+
+            logging.info("Storing Feature Engineered Data in MongoDB...")
+            utils.store_dataframe_in_mongodb(
+                dynamic_pricing_data, feature_engineered_collection_name, db)
+
+    else:
+        logging.error("Failed to connect to MongoDB database.")
