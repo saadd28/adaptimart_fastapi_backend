@@ -6,9 +6,22 @@ from datetime import datetime, timedelta
 from sklearn.preprocessing import LabelEncoder
 import holidays
 import logging
+import json
+import sys
 
 
 def get_mongodb_connection(host, port, database):
+    """
+    Establishing Connection with MongoDB
+
+    Args:
+        host (string): name of the hosting server
+        port (int): port of mongodb
+        database (string): name of database
+
+    Returns:
+        pymongo.database.Database: db variable
+    """
     try:
         # Create MongoDB connection string
         connection_string = f"mongodb://{host}:{port}/{database}"
@@ -23,66 +36,39 @@ def get_mongodb_connection(host, port, database):
         return None
 
 
-def fetch_data(collection_name, db):
-    try:
-        cursor = db[collection_name].find()
-        data = pd.DataFrame(list(cursor))
-        return data
-    except Exception as e:
-        logging.error(
-            f"Error fetching data from collection '{collection_name}': {e}")
-        return None
-    # try:
-    #     cursor = db[collection_name].find({"SiteId": site_id})
-    #     data = pd.DataFrame(list(cursor))
-    #     return data
-    # except Exception as e:
-    #     logging.error(
-    #         f"Error fetching data from collection '{collection_name}': {e}")
-    #     return None
-
-
-def fetch_configurations(collection_name, db, default_configurations):
-    try:
-        # Check if the configurations collection exists
-        if collection_name not in db.list_collection_names():
-            # If it doesn't exist, create it with default configurations
-            if default_configurations is None:
-                logging.error("Default configurations not provided.")
-                return None
-            logging.info("Creating Config Vars Collection in MongoDB")
-            db.create_collection(collection_name)
-            default_configurations = {
-                "site_id": "201cb789-4198-488b-a5eb-4e7df0fb4bee",
-                "threshold_base_price_change": 5,
-                "threshold_minimum_sales": 200,
-                "threshold_recent_months": 20,
-                "frequency": 1
-            }
-            db[collection_name].insert_one(default_configurations)
-            return default_configurations
-        else:
-            # Configurations collection exists, fetch the configurations
-            logging.info("Config Vars Collection Already Exists")
-            cursor = db[collection_name].find().limit(1)
-            return cursor[0]
-    except Exception as e:
-        logging.error(
-            f"Error fetching data from collection '{collection_name}': {e}")
-        return None
-
-
 def fetch_tenants_list(collection_name, db):
+    """
+    Fetching Tenants List from MongoDB
+
+    Args:
+        collection_name (string): Name of collection containing tenants list
+        db (pymongo.database.Database): Database variable
+
+    Returns:
+        list: List of Tenants
+    """
     try:
         # Check if the tenants collection exists
         if collection_name not in db.list_collection_names():
-            logging.error(f"Collection '{collection_name}' does not exist.")
-            return None
-        else:
-            # Tenants collection exists, fetch the tenants_list
-            cursor = db[collection_name].find()
-            tenants_list = [doc for doc in cursor]
-            return tenants_list
+            logging.info(
+                f"Collection '{collection_name}' does not exist. Creating the collection.")
+            # Create the collection
+            db.create_collection(collection_name)
+            # Insert the document in the collection
+            db[collection_name].insert_one({
+                "tenant_name": "denvermattress",
+                "site_id": [
+                    "201cb789-4198-488b-a5eb-4e7df0fb4bee",
+                    "8d3ea3bc-f65b-4227-9fa6-6fae40e4575a"
+                ]
+            })
+            logging.info("Document inserted into the collection.")
+
+        # Fetch the tenants_list
+        cursor = db[collection_name].find()
+        tenants_list = [doc for doc in cursor]
+        return tenants_list
+
     except Exception as e:
         logging.error(
             f"Error fetching data from collection '{collection_name}': {e}")
@@ -90,19 +76,148 @@ def fetch_tenants_list(collection_name, db):
 
 
 def extract_site_ids(tenants_list):
-    site_ids = [tenant['site_id'] for tenant in tenants_list]
-    return site_ids
-
-
-def data_amputation(df, frequency):
-    """_summary_
+    """
+    Extracting site ids from the list of tenants
 
     Args:
-        df (_type_): _description_
-        frequency (_type_): _description_
+        tenants_list (list): list of tenants
 
     Returns:
-        _type_: _description_
+        list: List of site ids
+    """
+    try:
+        site_ids = []
+        for tenant in tenants_list:
+            # Assuming each tenant document contains a 'site_id' field which is a list
+            if 'site_id' in tenant:
+                site_ids.extend(tenant['site_id'])
+
+        return site_ids
+    except Exception as e:
+        logging.error(f"Error extracting site IDs: {e}")
+        return None
+
+
+def feature_engineering_collection_management(collection_name, db):
+    """
+    Clearing Feature Engineering Collection
+    Creating new collection if it doesn't exists previously
+
+    Args:
+        collection_name (string): feature engineering collection name
+        db (pymongo.database.Database): db variable
+    """
+    try:
+        if collection_name in db.list_collection_names():
+            collection = db[collection_name]
+            # Check if the collection has documents
+            if collection.count_documents({}) > 0:
+                # Delete all documents from the collection
+                collection.delete_many({})
+        else:
+            # If the collection doesn't exist, create one
+            db.create_collection(collection_name)
+
+    except Exception as e:
+        logging.error(
+            f"An error occurred in either deleting the documents from feature engineering table or creating new collection: {e}")
+
+
+def fetch_configurations(collection_name, db, site_id):
+    """
+    Fetching Configurations from Config Vars Collection
+    Creating New Collection with default configurations if the collection doesn't exists previously
+
+    Args:
+        collection_name (string): configurations collection name
+        db (pymongo.database.Database): db variable
+        site_id (string): identifying the site for which configurations needs to be fetched
+
+    Returns:
+        dict: dictionary containing configurations corresponding to thr site id
+    """
+    try:
+        # Check if the configurations collection exists
+        if collection_name not in db.list_collection_names():
+            logging.info("Creating Config Vars Collection in MongoDB")
+            db.create_collection(collection_name)
+            default_configurations = [
+                {
+                    "site_id": "201cb789-4198-488b-a5eb-4e7df0fb4bee",
+                    "threshold_base_price_change": 5,
+                    "threshold_minimum_sales": 200,
+                    "threshold_recent_months": 20,
+                    "frequency": 1
+                },
+                {
+                    "site_id": "8d3ea3bc-f65b-4227-9fa6-6fae40e4575a",
+                    "threshold_base_price_change": 10,
+                    "threshold_minimum_sales": 400,
+                    "threshold_recent_months": 20,
+                    "frequency": 1
+                }
+            ]
+            logging.info("Setting Default Configurations: %s",
+                         json.dumps(default_configurations, indent=4))
+            for config in default_configurations:
+                db[collection_name].insert_one(config)
+
+            # Construct a dictionary with site_id as keys for easy retrieval
+            default_configurations_dict = {
+                config["site_id"]: config for config in default_configurations}
+
+            return default_configurations_dict.get(site_id)
+
+        else:
+            # Configurations collection exists, fetch the configurations
+            logging.info("Config Vars Collection Already Exists")
+            cursor = db[collection_name].find({"site_id": site_id}).limit(1)
+            config_var = next(cursor, None)
+            if config_var:
+                logging.info("Config Vars Fetched: %s", config_var)
+                return config_var
+            else:
+                logging.info(
+                    "No config variables found for site ID: %s", site_id)
+                return None
+    except Exception as e:
+        logging.error(
+            f"Error fetching data from collection '{collection_name}': {e}")
+        return None
+
+
+def fetch_data(collection_name, db):
+    """
+    Fetching all the data of products from MongoDB
+
+    Args:
+        collection_name (string): dynamic pricing data collection name
+        db (pymongo.database.Database): db variable
+
+    Returns:
+        pandas.core.frame.DataFrame: all the dynamic pricing data
+    """
+    try:
+        cursor = db[collection_name].find()
+        data = pd.DataFrame(list(cursor))
+
+        return data
+    except Exception as e:
+        logging.error(
+            f"Error fetching data from collection '{collection_name}': {e}")
+        return None
+
+
+def data_resampling(df, frequency):
+    """
+    Resampling data accordiing to the frequency passed and filling nulls appropriately
+
+    Args:
+        df (pandas.core.frame.DataFrame): dynamic pricing data
+        frequency (string): frequency value
+
+    Returns:
+        pandas.core.frame.DataFrame: resampled dynamic pricing data
     """
 
     try:
@@ -126,7 +241,6 @@ def data_amputation(df, frequency):
         data = pd.DataFrame(
             {
                 'creation_date': feature_frequency_base_price_df['creation_date'],
-                # 'site_id': feature_frequency_site_id_df['site_id'],
                 'product_item_sku_id': feature_frequency_base_price_df['product_item_sku_id'],
                 'sales': feature_frequency_quantity_df['sales'],
                 'base_price': feature_frequency_base_price_df['base_price'],
@@ -139,13 +253,26 @@ def data_amputation(df, frequency):
 
         return data
     except Exception as e:
-        logging.error(f"Error in data amputation function: {e}")
+        logging.error(f"Error in data resampling function: {e}")
         return None
 
 
-def preprocessing_data(df, site_id, frequency_list, frequency):
+def preprocessing_data(df, site_id, frequency):
+    """
+    This function maps the column names to their standard names
+    It filters useful columns
+    It resamples data according to the frequency passed
+
+
+    Args:
+        df (pandas.core.frame.DataFrame): dynamic pricing data
+        site_id (string): site id for which data is to be filtered
+        frequency (string): frequency of resampling data
+
+    Returns:
+        pandas.core.frame.DataFrame: resampled data of all the products based on frequency and site id
+    """
     try:
-        # print(df.columns)
         # Lowering Case Column Names
         df.columns = [col.lower() for col in df.columns]
 
@@ -163,7 +290,6 @@ def preprocessing_data(df, site_id, frequency_list, frequency):
             'siteid': 'site_id'
         }
         df = df.rename(columns=column_mappings)
-        # print(df.head(10))
 
         df = df[df['site_id'] == site_id].copy()
 
@@ -188,15 +314,15 @@ def preprocessing_data(df, site_id, frequency_list, frequency):
         df.sort_index(ascending=True, inplace=True)
         df.index = pd.to_datetime(df.index)
 
-        print("Before Amputation:")
-        df.info()
-        data = data_amputation(df, frequency)
+        logging.info("Before Resampling:")
+        logging.info(df.info())
+        data = data_resampling(df, frequency)
 
-        print("After Amputation:")
         data['site_id'] = df['site_id'].iloc[0]
-        # data.to_csv('data.csv', index=False, mode='w')
 
-        data.info()
+        logging.info("After Resampling:")
+        logging.info(data.info())
+
         return data
     except Exception as e:
         logging.error(f"Error in preprocessing data: {e}")
@@ -204,6 +330,16 @@ def preprocessing_data(df, site_id, frequency_list, frequency):
 
 
 def filter_on_base_price_change(df, threshold_base_price_change):
+    """
+    Filters the data based on the number of base price changes of the product in its span
+
+    Args:
+        df (pandas.core.frame.DataFrame): dynamic pricing data
+        threshold_base_price_change (integer): threshold value for number of base price changes
+
+    Returns:
+        pandas.core.frame.DataFrame: filtered dynamic pricing data
+    """
     try:
         # Identify changes in the base price for each product_item_sku_id
         df['base_price_change'] = df.groupby('product_item_sku_id')[
@@ -227,6 +363,16 @@ def filter_on_base_price_change(df, threshold_base_price_change):
 
 
 def filter_on_minimum_sales(df, threshold_minimum_sales):
+    """
+    Filters the data based on the number of minimum sales of the product in its span
+
+    Args:
+        df (pandas.core.frame.DataFrame): dynamic pricing data
+        threshold_minimum_sales (integer): threshold value for number of minimum sales
+
+    Returns:
+        pandas.core.frame.DataFrame: filtered dynamic pricing data
+    """
     try:
         total_sales_per_sku = df.groupby('product_item_sku_id')[
             'sales'].sum().reset_index()
@@ -242,23 +388,18 @@ def filter_on_minimum_sales(df, threshold_minimum_sales):
         return None
 
 
-def filter_on_minimum_days_sold(df, threshold_minimum_days_sold):
-    try:
-        total_sales_per_sku = df.groupby('product_item_sku_id')[
-            'sales'].sum().reset_index()
-        skus_above_threshold = total_sales_per_sku[total_sales_per_sku['sales']
-                                                   >= threshold_minimum_days_sold]
-
-        filtered_df_sales = df[df['product_item_sku_id'].isin(
-            skus_above_threshold['product_item_sku_id'])]
-
-        return filtered_df_sales
-    except Exception as e:
-        logging.error(f"Error in Filtering on Minimum Days Sold: {e}")
-        return None
-
-
 def filter_on_recent_months(df, threshold_recent_months):
+    """
+    Filters the data based on the number of recent months the product is sold in
+    If the product is not sold in previous recent months number of months, it is filtered out
+
+    Args:
+        df (pandas.core.frame.DataFrame): dynamic pricing data
+        threshold_recent_months (integer): threshold value for number of recent months
+
+    Returns:
+        pandas.core.frame.DataFrame: filtered dynamic pricing data
+    """
     try:
         # Convert 'creation_date' to datetime format
         df['creation_date'] = pd.to_datetime(
@@ -280,7 +421,21 @@ def filter_on_recent_months(df, threshold_recent_months):
         return None
 
 
-def threshold_filtering_price_optimization(df, threshold_base_price_change, threshold_minimum_sales, threshold_recent_months):
+def threshold_filtering_price_optimization(df, threshold_base_price_change, threshold_minimum_sales, threshold_recent_months, interval_days, site_id):
+    """
+    This function applies all the thresholds on the dynamic pricing data to filter out the useful skuids for us
+
+    Args:
+        df (pandas.core.frame.DataFrame): dynamic pricing data
+        threshold_base_price_change (integer): threshold value for number of base price changes
+        threshold_minimum_sales (integer): threshold value for number of minimum sales
+        threshold_recent_months (integer): threshold value for number of recent months
+        interval_days (integer): total no of days for which data will be filtered from today 
+        site_id (string): the site for which data is being processed
+
+    Returns:
+        pandas.core.frame.DataFrame: filtered dynamic pricing data
+    """
     try:
         filtered_df = filter_on_base_price_change(
             df, threshold_base_price_change)
@@ -302,9 +457,23 @@ def threshold_filtering_price_optimization(df, threshold_base_price_change, thre
         filtered_df_months['product_item_sku_id_encoded'] = label_encoder.fit_transform(
             filtered_df_months['product_item_sku_id'])
 
-        cutoff_date = '2021-04-01'  # Replace with your desired date
+        # cutoff_date = '2021-04-01'  # Replace with your desired date
+        # Get the current system date
+        end_date = datetime.now()
+
+        # Calculate the starting date of the interval by subtracting interval_days from the end date
+        start_date = end_date - timedelta(days=interval_days)
+
+        # Convert the start date to a string in the format 'YYYY-MM-DD'
+        cutoff_date = start_date.strftime('%Y-%m-%d')
+        # Display the cutoff date using logging.info()
+        logging.info("Cutoff Date: %s", cutoff_date)
         filtered_df_months = filtered_df_months[filtered_df_months['creation_date'] >= cutoff_date]
+
         # filtered_df_months.to_csv('thresholding_final.csv', index=False, mode='w')
+        if filtered_df_months.empty:
+            logging.info(
+                "Data is not sufficient on the defined thresholds for the site id: %s", site_id)
 
         return filtered_df_months
     except Exception as e:
@@ -313,6 +482,15 @@ def threshold_filtering_price_optimization(df, threshold_base_price_change, thre
 
 
 def feature_engineering(df):
+    """
+    Applies feature engineering to the dynamic pricing data
+
+    Args:
+        df (pandas.core.frame.DataFrame): dynamic pricing data
+
+    Returns:
+        pandas.core.frame.DataFrame: filtered dynamic pricing data
+    """
     try:
 
         df = df.reset_index(drop=True)
@@ -356,6 +534,7 @@ def feature_engineering(df):
         # Calculate profit margin assuming 100% when base_price is half of msrp
         df['margin'] = ((df['msrp'] - df['base_price']) /
                         (df['msrp'] / 2)) * 100
+
         # Print the updated DataFrame
         df['creation_date'] = df['creation_date'].dt.strftime('%Y-%m-%d')
         # df.to_csv('feature_engineering.csv', index=False, mode='w')
@@ -385,7 +564,20 @@ def feature_engineering(df):
 
 
 def store_dataframe_in_mongodb(df, collection_name, db):
+    """
+    Stores the dataframe passed to it in the collection name which is passed to this function in the mongodb.
+
+    Args:
+        df (pandas.core.frame.DataFrame): dynamic pricing data
+        collection_name (string): feature engineering collection name
+        db (pymongo.database.Database): db variable
+    """
     try:
+        if df.empty:
+            logging.info(
+                "Empty Dataframe to store in Feature Engineering Collection")
+            return
+
         # Convert DataFrame to list of dictionaries
         data = df.to_dict(orient='records')
 
@@ -397,21 +589,3 @@ def store_dataframe_in_mongodb(df, collection_name, db):
 
     except Exception as e:
         logging.error(f"An error storing feature engineered data: {e}")
-
-
-def feature_engineering_collection_management(collection_name, db):
-    try:
-        # Specify the collection
-        collection = db[collection_name]
-
-        # Check if the collection exists
-        if collection.count_documents({}) > 0:
-            # Delete all documents from the collection
-            collection.delete_many({})
-        else:
-            # If the collection doesn't exist, create one
-            db.create_collection(collection_name)
-
-    except Exception as e:
-        logging.error(
-            f"An error occurred while storing feature engineered data: {e}")
